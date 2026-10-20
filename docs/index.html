@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bulk WHOIS Lookup API &amp; Bulk DNS Lookup - Domain Expiry Checker</title>
+<meta name="description" content="Bulk WHOIS lookup API and bulk DNS lookup via RDAP: availability, registrar, expiry dates, nameservers, MX, TXT. Up to 1,000 domains per run, $0.002 per domain, errors free. curl, Node and Python examples.">
+<link rel="canonical" href="https://jjlarsensa.github.io/bulk-whois-dns-api/">
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;color:#222}
+pre{background:#f4f4f4;padding:1rem;overflow:auto;border-radius:6px}
+code{background:#f4f4f4;padding:0 .25rem}
+table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:.4rem .8rem;text-align:left}
+a.btn{display:inline-block;background:#0a58ca;color:#fff;padding:.6rem 1.2rem;border-radius:6px;text-decoration:none}
+</style>
+</head>
+<body>
+<h1>Bulk WHOIS Lookup API &amp; Bulk DNS Lookup</h1>
+<p>A <strong>bulk WHOIS lookup API</strong>, <strong>bulk DNS lookup</strong> and <strong>domain expiry checker</strong>. Up to 1,000 domains per run: availability, registrar, created and expiry dates, age, nameservers, A / MX / TXT records. Uses RDAP (the official WHOIS successor) plus DNS: no scraping, no proxy, no captcha.</p>
+<p><a class="btn" href="https://apify.com/pennydata/bulk-domain-whois-dns-lookup">Try it on Apify: pennydata/bulk-domain-whois-dns-lookup</a></p>
+
+<h2>Pricing</h2>
+<table>
+<tr><th>Event</th><th>Price (Free plan, read 2026-10-20)</th></tr>
+<tr><td>Domain successfully looked up</td><td>$0.002 each ($2 / 1,000)</td></tr>
+</table>
+<p>Errors and unknown results are not charged. The <a href="https://apify.com/pennydata/bulk-domain-whois-dns-lookup">actor page</a> is the source of truth.</p>
+
+<h2>curl</h2>
+<pre>export APIFY_TOKEN=your_token_here
+curl -X POST "https://api.apify.com/v2/acts/pennydata~bulk-domain-whois-dns-lookup/run-sync-get-dataset-items?token=$APIFY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"domains":["example.com","python.org"]}'</pre>
+
+<h2>Node.js (apify-client)</h2>
+<pre>import { ApifyClient } from 'apify-client';
+
+const client = new ApifyClient({ token: process.env.APIFY_TOKEN });
+const run = await client.actor('pennydata/bulk-domain-whois-dns-lookup').call({
+  domains: ['example.com', 'python.org'],
+});
+const { items } = await client.dataset(run.defaultDatasetId).listItems();
+console.log(items);</pre>
+
+<h2>Python</h2>
+<pre>import os, requests
+
+resp = requests.post(
+    "https://api.apify.com/v2/acts/pennydata~bulk-domain-whois-dns-lookup/run-sync-get-dataset-items",
+    params={"token": os.environ["APIFY_TOKEN"]},
+    json={"domains": ["example.com", "python.org"]},
+    timeout=300,
+)
+print(resp.json())</pre>
+
+<h2>Output (abridged)</h2>
+<pre>{
+  "domain": "python.org",
+  "available": false,
+  "registrar": "Gandi SAS",
+  "expires": "2033-03-28T05:00:00Z",
+  "ageDays": 11525,
+  "nameservers": ["ns-1134.awsdns-13.org"],
+  "mx": ["50 mail.python.org"],
+  "source": "rdap"
+}</pre>
+
+<h2>Limits</h2>
+<p>Some country-code TLDs (e.g. .de, .io) have no RDAP; those rows are <code>dns-only</code> without registrar or dates. <code>available: true</code> means the registry said "not found", not that the name is purchasable. See the <a href="https://github.com/jjlarsensa/bulk-whois-dns-api#limits-honest-notes">README</a>.</p>
+
+<h2>More actors</h2>
+<ul>
+<li><a href="https://apify.com/pennydata/shot-pdf">Website Screenshot &amp; URL to PDF</a></li>
+<li><a href="https://apify.com/pennydata/bulk-email-validator-no-smtp">Bulk Email Validator</a></li>
+<li><a href="https://apify.com/pennydata/appstore-reviews-rss">App Store Reviews Scraper</a></li>
+<li><a href="https://apify.com/pennydata/website-tech-stack-detector">Website Tech Stack Detector</a></li>
+</ul>
+
+<h2>About</h2>
+<p>Built and maintained with an AI-assisted workflow (Claude), operated by the owner of the jjlarsensa GitHub account. MIT licensed. <a href="https://github.com/jjlarsensa/bulk-whois-dns-api">Source on GitHub</a>.</p>
+</body>
+</html>
