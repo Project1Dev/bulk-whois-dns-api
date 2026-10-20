@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bulk WHOIS Lookup for a List of Domains: Expiry, Age and Registrar via RDAP (Script + CSV)</title>
+<meta name="description" content="Bulk WHOIS lookup with RDAP: an asyncio Python script with retries and rate limiting that outputs registrar, creation date, expiry, age and days-to-expiry as CSV, plus a hosted option for large lists.">
+<link rel="canonical" href="https://jjlarsensa.github.io/bulk-whois-dns-api/bulk-whois-lookup-rdap-csv/">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "HowTo", "name": "Bulk WHOIS Lookup for a List of Domains: Expiry, Age and Registrar via RDAP (Script + CSV)", "description": "Bulk WHOIS lookup with RDAP: an asyncio Python script with retries and rate limiting that outputs registrar, creation date, expiry, age and days-to-expiry as CSV, plus a hosted option for large lists.", "step": [{"@type": "HowToStep", "position": 1, "name": "Query RDAP for one domain", "text": "Query RDAP for one domain"}, {"@type": "HowToStep", "position": 2, "name": "Run many lookups concurrently with a concurrency cap", "text": "Run many lookups concurrently with a concurrency cap"}, {"@type": "HowToStep", "position": 3, "name": "Retry on timeouts and rate limits with backoff", "text": "Retry on timeouts and rate limits with backoff"}, {"@type": "HowToStep", "position": 4, "name": "Compute domain age and days to expiry", "text": "Compute domain age and days to expiry"}, {"@type": "HowToStep", "position": 5, "name": "Write CSV, or run the hosted actor for big lists", "text": "Write CSV, or run the hosted actor for big lists"}]}</script>
+<style>body{font:16px/1.6 system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;color:#222}pre{background:#f4f4f4;padding:1rem;overflow:auto;border-radius:6px}code{background:#f4f4f4;padding:0 .25rem}pre code{padding:0}a.btn{display:inline-block;background:#0a58ca;color:#fff;padding:.6rem 1.2rem;border-radius:6px;text-decoration:none}footer{margin-top:3rem;color:#666;font-size:.9rem}</style>
+</head>
+<body>
+<h1>Bulk WHOIS Lookup for a List of Domains: Expiry, Age and Registrar via RDAP (Script + CSV)</h1>
+<h2>WHOIS vs RDAP, and redaction</h2>
+<p>Classic WHOIS is a plain-text protocol on port 43 with no standard format, which is why bulk scripts built on it time out or mis-parse. Registries now also publish <strong>RDAP</strong>, the structured JSON successor over HTTPS. Since GDPR, registrant names and emails are mostly redacted in both, so expect registrar, dates, status and nameservers, not owner identity.</p>
+<h2>One domain with curl</h2>
+<p><code>rdap.org</code> is a public bootstrap that redirects to the right registry's RDAP server:</p>
+<pre><code>curl -sL https://rdap.org/domain/python.org | python3 -m json.tool | head -40</code></pre>
+<p>The <code>events</code> array holds <code>registration</code> and <code>expiration</code> dates; the entity with role <code>registrar</code> carries the registrar name in its vCard. An unregistered .com returns HTTP 404. rdap.org sits behind a bot filter: a request with aiohttp's default User-Agent got a 403 in my test, so send a descriptive User-Agent.</p>
+<h2>Bulk script: asyncio, concurrency cap, backoff</h2>
+<p>Timeouts on big lists usually come from firing everything at once. This script caps concurrency at 5, retries timeouts, 429s and 5xx with exponential backoff, and writes CSV with age and days to expiry. Tested on 2026-10-20 with three domains (one long registered, one reserved, one unregistered).</p>
+<pre><code>import asyncio, csv, sys
+from datetime import datetime, timezone
+import aiohttp
+
+SEM = asyncio.Semaphore(5)  # stay polite: RDAP servers rate-limit
+
+async def lookup(session, domain, tries=4):
+    for i in range(tries):
+        async with SEM:
+            try:
+                async with session.get(f&quot;https://rdap.org/domain/{domain}&quot;, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                    if r.status == 404:
+                        return {&quot;domain&quot;: domain, &quot;status&quot;: &quot;not-registered&quot;}
+                    if r.status == 429 or r.status &gt;= 500:
+                        raise aiohttp.ClientError(r.status)
+                    data = await r.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                await asyncio.sleep(2 ** i)
+                continue
+        ev = {e[&quot;eventAction&quot;]: e[&quot;eventDate&quot;] for e in data.get(&quot;events&quot;, [])}
+        now = datetime.now(timezone.utc)
+        parse = lambda s: datetime.fromisoformat(s.replace(&quot;Z&quot;, &quot;+00:00&quot;))
+        created, expires = ev.get(&quot;registration&quot;), ev.get(&quot;expiration&quot;)
+        registrar = next((p[3] for e in data.get(&quot;entities&quot;, []) if &quot;registrar&quot; in e.get(&quot;roles&quot;, [])
+                          for p in e.get(&quot;vcardArray&quot;, [None, []])[1] if p[0] == &quot;fn&quot;), &quot;&quot;)
+        return {&quot;domain&quot;: domain, &quot;status&quot;: &quot;registered&quot;, &quot;registrar&quot;: registrar,
+                &quot;created&quot;: created, &quot;expires&quot;: expires,
+                &quot;age_days&quot;: (now - parse(created)).days if created else &quot;&quot;,
+                &quot;days_to_expiry&quot;: (parse(expires) - now).days if expires else &quot;&quot;}
+    return {&quot;domain&quot;: domain, &quot;status&quot;: &quot;error&quot;}
+
+async def main(domains):
+    async with aiohttp.ClientSession(headers={&quot;User-Agent&quot;: &quot;bulk-rdap-example/1.0 (script)&quot;, &quot;Accept&quot;: &quot;application/rdap+json&quot;}) as s:
+        rows = await asyncio.gather(*(lookup(s, d) for d in domains))
+    w = csv.DictWriter(sys.stdout, [&quot;domain&quot;, &quot;status&quot;, &quot;registrar&quot;, &quot;created&quot;, &quot;expires&quot;, &quot;age_days&quot;, &quot;days_to_expiry&quot;])
+    w.writeheader(); w.writerows(rows)
+
+asyncio.run(main(sys.argv[1:] or [&quot;python.org&quot;, &quot;example.com&quot;, &quot;some-name-nobody-registered-12345.com&quot;]))
+</code></pre>
+<p>Run: <code>pip install aiohttp</code>, then <code>python rdap.py python.org example.com</code>, or pass your own list (for 20,000 domains, read a file and chunk it). Tested output for the defaults: <code>python.org,registered,Gandi SAS,1995-03-27...</code>, <code>example.com,registered,...</code>, and <code>not-registered</code> for the unregistered name. Expiry alerts: run it daily from cron and filter rows with <code>days_to_expiry &lt; 30</code>. RDAP servers rate-limit, so keep concurrency low and honour 429 responses.</p>
+<h2>Hosted option for large lists</h2>
+<p>Disclosure: I built an Apify actor for this, <a href="https://apify.com/pennydata/bulk-domain-whois-dns-lookup">pennydata/bulk-domain-whois-dns-lookup</a>. It queries official RDAP and adds DNS records (MX, TXT, nameservers), up to 1,000 domains per run. Pay-per-event: $0.002 per domain looked up (read live from the actor API on 2026-10-20; check the actor page for the current price); errors and unknown results are not charged.</p>
+<pre><code>import os, sys, requests
+
+token = os.getenv(&quot;APIFY_TOKEN&quot;)
+if not token:
+    sys.exit(&quot;Error: APIFY_TOKEN is not set. Get a token at https://console.apify.com/account/integrations&quot;)
+
+resp = requests.post(
+    &quot;https://api.apify.com/v2/acts/pennydata~bulk-domain-whois-dns-lookup/run-sync-get-dataset-items&quot;,
+    params={&quot;token&quot;: token},
+    json={&quot;domains&quot;: [&quot;example.com&quot;, &quot;python.org&quot;, &quot;some-name-nobody-registered-12345.com&quot;]},
+    timeout=300,
+)
+if not resp.ok:
+    sys.exit(f&quot;Error: Apify API returned {resp.status_code}: {resp.text[:300]}&quot;)
+for r in resp.json():
+    print(r.get(&quot;domain&quot;), &quot;available=%s&quot; % r.get(&quot;available&quot;), &quot;expires=%s&quot; % r.get(&quot;expires&quot;), r.get(&quot;error&quot;) or &quot;&quot;)
+</code></pre>
+<p>Needs <code>APIFY_TOKEN</code>; exits with an error message if it is not set.</p>
+<p><a class="btn" href="https://apify.com/pennydata/bulk-domain-whois-dns-lookup">Hosted option: pennydata/bulk-domain-whois-dns-lookup on Apify</a></p>
+<footer>Written with AI (Claude). The author also built the linked Apify actor. Code examples were run on 2026-10-20; prices are read from the live actor API and may change.</footer>
+</body>
+</html>
